@@ -1,0 +1,671 @@
+---
+title: "Datasets_tesis_Multivariados"
+author: "RU"
+date: "2023-04-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(aricode)
+library(clue)
+library(cluster)
+library(ClusterR)
+library(data.table)
+library(datasets)
+library(diceR)
+library(dplyr)
+library(funModeling)
+library(ggplot2)
+library(gtools)
+library(modeest)
+library(plyr)
+library(progress)
+library(sClust)
+library(tidyverse)
+
+```
+
+
+```{r}
+
+# Cargamos los datos de Estabilidad de red eléctrica de UCI
+
+datos<-Data_for_UCI_named
+
+head(datos)
+
+```
+
+```{r}
+
+#Vemos como esta conformado el conjunto de datos
+summary(datos)
+```
+
+
+
+```{r}
+
+# Podemos observar como estan compuestas las observaciones
+
+tabla <- table(datos$stabf)
+tabla <- prop.table(tabla)
+tabla
+
+
+```
+
+
+```{r}
+barplot(tabla, xlab='Estabilidad Sistema Eléctrico',
+        ylab='Frecuencia relativa', las=1)
+```
+```{r}
+#Colocamos valores a las etiquetas para luego realizar la validación. Colocamos un 1 si es inestable o 2 si es estable
+
+etiquetas_datos <- ifelse(datos$stabf == "unstable", 1, 2)
+```
+
+
+
+
+
+```{r}
+
+
+set.seed(756)
+
+#Tomamos una muestra para reducir la cantidad de datos de 10000 a 1000 para trabajar con menos datos para realizar 50 iteraciones en cada uno de los métodos.
+
+# En esta lista guardamos las muestras de 1000 datos
+datos_muestra<-list() 
+
+# Para cada una de las muestras guardamos las etiquetas correspondientes
+etiquetas_datos_muestra<-list()
+
+# Aca colocaremos las muestras normalizadas para correr los algoritmos
+datos_norm<-list()
+
+for (i in 1:50){
+  
+  # Generamos las muestras aleatorias
+  datos_muestra[[i]] <- datos[sample(nrow(datos), 1000), ]
+  
+  #Colocamos valores a las etiquetas para luego realizar la validación. Colocamos un 1 si es inestable o 2 si es     estable
+  etiquetas_datos_muestra[[i]] <- ifelse(datos_muestra[[i]]$stabf == "unstable", 1, 2)
+  
+ # Normalizamos los datos para evitar las distorciones que pueden generar los datos que esten en escalas           diferentes.Eliminamos las últimas dos columnas  que son las etiquetas y  la variable dependiente p1 ya que      es la suma de p2,p3 y p4.
+
+  datos_num <- subset(datos_muestra[[i]], select = -c(p1,stab, stabf))
+  datos_norm[[i]] <- scale(datos_num)
+  
+}
+```
+
+
+```{r}
+ # Aplicamos el algoritmo de K-medias con dos centros. Realizamos 50 iteraciones.
+
+
+
+set.seed(118)
+
+datos_num_Kmedias<-c()
+res_mult_kmedias<-c()
+
+
+for ( i in 1:50){
+  
+    
+    # Tenemos las etiquetas
+  true_labels <- as.numeric(as.character(etiquetas_datos_muestra[[i]]))
+
+    # Aplicamos k-medias
+  cl_mult <- kmeans(datos_norm[[i]], centers = 2, nstart = 25)
+  datos_num_Kmedias<-cl_mult$cluster
+  
+  # Calculamos el RI
+  cluster_labels <- as.numeric(as.character(datos_num_Kmedias))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_mult_kmedias[i]<-valid
+  
+}
+
+  
+  
+  
+
+```
+
+```{r}
+
+# Validacion K- medias con RI 
+
+
+
+# Tomamos el valor medio como validación
+validacion_kmedias <- mean(res_mult_kmedias)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_mult_kmedias)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_kmedias, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+
+```
+
+
+```{r}
+
+#METODO EAC
+
+#Vamos a generar varias particiones a partir de las distintas inicializaciones de k-medias. Trabajamos con la muestra de 1000 datos por reducir el tiempo de ejecución. Se realizan 50 iteraciones para asegurar estabilidad.
+
+set.seed(388)
+
+suppressWarnings({
+
+#El valor de k para generar las particiones iniciales.  
+k<-round(sqrt(1000))
+
+
+
+
+# Fijamos la cantidad de clusterers 
+q_clusterers<-200
+
+
+#Vamos a guardar en esta lista los resultados de las 50 clasificaciones
+clasif_eac<-c()
+
+
+# Cantidad de iteraciones
+num_iter<-50
+
+pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Tiempo transcurrido: :elapsedfull || Tiempo restante estimado: :eta]",
+                       total = num_iter,
+                       complete = "=",   
+                       incomplete = "-", 
+                       current = ">",    
+                       clear = FALSE,    
+                       width = 100)  
+
+
+for (m in 1:num_iter){
+
+    pb$tick()
+  
+    # En esta lista vamos a guardar los 200 clusterers
+    km_multiv <- list()
+    
+    
+    for ( i in 1:q_clusterers){
+       km_multiv[i] <- kmeans(datos_norm[[m]], centers = k)
+       
+           }
+        
+    # Vamos a guardar las matrices en una lista
+    
+    mk_mv <- list()    
+    
+    # Generamos q_clusterers matrices nulas de 1000 x 1000
+    
+    for ( i in 1:1000){
+      
+      mk_mv[[i]] <- matrix(0, ncol = 1000, nrow = 1000)
+       
+    }
+    
+    # En la matriz colocamos el valor 1 si dos objetos están en el mismo cluster y 0 si no coinciden 
+    
+    for (l in 1:q_clusterers){
+      for (i in 1:1000) {
+        for (j in 1:1000){ 
+          if (km_multiv[[l]][i] == km_multiv[[l]][j]){
+            mk_mv[[l]][i,j] = 1  
+    }     else {
+            mk_mv[[l]][i,j] = 0
+    }
+    }
+    }
+    }
+
+    
+    m_simil <-matrix()
+    
+    # Sumamos las matrices
+    
+    m_simil <- mk_mv[[1]]
+    
+    for (i in 2:length(km_multiv)) {
+      m_simil <- m_simil + mk_mv[[i]]
+    }
+    
+    
+    
+    # Hacemos la matriz de similaridad donde en cada posición de la matriz encontraremos en promedio cuantas          veces dos elementos coinciden en un cluster a los largo de los clusterers
+    
+    ms <- m_simil/length(km_multiv)
+    
+    # Debemos convertir a matriz de distancias para poder aplicar el método jerarquico
+    md <- 1-ms
+    MDist = as.dist(md)
+        
+    # Una vez obtenida la matriz podemos aplicar método Jerárquico Average    
+    hc1 <- hclust(MDist, method = "average" )    
+    clasif<-cutree(hc1, k=2) # vamos a cortar el arbol en 2 clusters    
+      
+  
+  # Tenemos las etiquetas originales
+  true_labels <- as.numeric(as.character(etiquetas_datos_muestra[[m]]))
+  
+  cluster_labels <- as.numeric(as.character(clasif))
+  
+  #Aplicamos RI
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  
+  #Guardmaos la validación en cada iteración
+  clasif_eac[m]<-valid
+  
+  Sys.sleep(0.1)
+  
+}
+
+
+
+})
+
+```
+ 
+ 
+```{r}
+
+#Validación EAC con RI
+
+# Tomamos el valor medio como validación
+validacion_eac <- mean(clasif_eac)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(clasif_eac)
+
+# Mmostramos los resultados
+cat("Rand index:", validacion_eac, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+
+```{r}
+
+# RELABELING
+
+#Vamos a obtener 13 clusterers, uno por cada corrida de k-medias variando el parámetro inicial.
+
+set.seed(197)
+
+q_datos = 1000
+
+
+# La cantidad de clusters de la partición final
+k=2
+
+# Cantidad de clusterers
+km = 13
+
+# Vamos a guardar las particiones en una lista
+part_kmeans <-list()
+part_km<-list()
+clusterer2 <- vector("list", length = km)
+clusterer_mult<-list()
+
+
+#Realizamos 50 iteraciones
+for(n in 1:50){
+  
+    # Realizamos las corridas de k-medias
+    for ( i in 1:km){
+       cl <- kmeans(datos_norm[[n]], centers = k)
+       part_km[[i]]<-cl$cluster
+        }
+    
+ 
+    
+    # Colocamos para cada cluster en las particiones, los data items que le pertenecen. De esta forma quedan          generados los clusterers
+    for ( i in 1:km){
+      for ( j in 1:k){
+       clusterer2[[i]][[j]] <- which(part_km[[i]]==j)  
+        
+       }
+    }
+    
+    # Armamos la matriz de kxk para poder ver los elementos que coinciden entre clusters de todos los                  clusterers.
+  # Necesitamos una matriz por relacionar los clusters entre el clusterer de referencia y el resto de los           clusterers. La cantidad de matrices es igual a el total de clusterers menos 1.
+        
+   # Creamos una lista de matrices vacías
+  
+    M_over = list()
+    
+    for ( i in 1:km){
+      
+       M_over[[i]] = matrix(0, ncol = k , nrow = k)
+    
+    }
+    
+    # Utilizamos la función intersect para determinar entre los pares de clusters, aquellos elementos que             coinciden.Tenemos que tomar un clusterer de base para buscar las coincidencias y renombrar
+    
+    clusterer<-part_kmeans
+    
+    for ( m in 1:length(M_over)){
+      for ( i in 1:k){
+        for ( j in 1:k){
+           # Tomamos el clusterer 3   como particiòn de base
+            M_over[[m]][i,j] = length(intersect(clusterer2[[3]][[i]],clusterer2[[m]][[j]]))
+        
+    }
+    }
+    }  
+    
+    # Nombramos filas y columnas de las matrices.
+    # Buscamos el máximo valor de coincidencias entre clusters, renombramos el cluster en función de la               etiqueta del cluster de referencia (en este caso el 3),eliminamos las filas y columnas                          correspondientes, y volvemos a hacer los mismo con el siguiente máximo hasta finalizar. De esta                 forma los clusters del clusterer en cuestión quedarán renombrados.
+      
+    
+    cont<-c()
+    coord <-list()
+    posicion <- c()
+    
+    
+    clust_mult<-part_km
+    
+    for ( i in 1:(km!=3)){
+    
+      for ( j in 1:k){
+        coord <- which(M_over[[i]] == max(M_over[[i]]), arr.ind = TRUE)
+    
+        fila_val_max <-coord[1] # son los k del clusterer 3 que tomamos de referencia
+        col_val_max <-coord[2] # son los k del clusterer a renombrar
+        clust_mult[[i]][clusterer2[[i]][[coord[2]]]]<- coord[1] # renombra el cluster con el valor de k  que                                                                      sale de la matriz de overlap (máximo overlap)
+        M_over[[i]][fila_val_max,col_val_max]<-0
+        
+      }
+    }
+
+  part_kmeans[[n]]<-part_km 
+  clusterer_mult[[n]]<-clust_mult
+
+}
+
+
+```
+
+
+
+
+```{r}
+# Método Voting
+  
+ 
+  # Donde vamos a guardar la clasificacion final del método Voting
+  lambda <- c()  
+   
+
+for (i in 1:50){
+
+  # pasamos los clusterers como dataframe para trabajarlo. Cada fila es un clusterer
+  dataframe_clusterer <- as.data.frame(do.call(rbind, clusterer_mult[[i]]))
+
+  # Tomamos cada dato y nos fijamos que etiqueta tiene en cada clusterer. Tomamos como etiqueta final para el       dato en cuestión aquella que se repita la mayor cantidad de veces.
+  
+  lamb <- lapply(dataframe_clusterer, FUN = mlv, method = "mfv")# con la funcion mlv obtenemos el valor mas                                                                       frecuente
+  
+  lamb <-unlist(lamb, use.names = FALSE) # convertimos a vector
+  
+  
+  # clasificacion final Voting
+  
+  lambda[[i]]<-lamb 
+
+}      
+    
+```
+
+```{r}
+#Validación VOTING con Rand Index
+
+
+# Vamos a guardar las 50 validaciones
+res_relab<-c()
+
+
+for ( i in 1:50){
+  
+  #Tenemos las etiquetas verdaderas
+  true_labels <- as.numeric(as.character(etiquetas_datos_muestra [[i]]))
+  cluster_labels <- as.numeric(as.character(lambda[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_relab[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_relab)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_relab)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+```
+
+```{r}
+
+# SELECTIVE WEIGTH VOTING
+
+#Se seleccionan aquellos clusterers cuyo peso wm supere el umbral thr=1/km y luego se considera el peso de cada   uno de los clusterers para determinar a que cluster pertenece cada dato.
+
+#Calculamos para cada clusterer la información mutua promedio respecto de los otros clusterers.
+clasif_final_SW<-list()
+
+per <- permutations(km, 2, 1:(km*(km-1))) #  Tomamos el clusterer 3 de referencia y calculamos la IMP con                                                    respecto al resto de los clusterers 
+
+for (n in 1:50){
+  
+  bm <- c() # Es la información mutua promedio
+  wm <- c() # Es el peso Wm cuya suma debe ser igual a 1
+  bm_t<-c()
+  per2<-per
+  
+  # Ecuación 1 del Zhou y Tang. Se calcula la NMI de cada cluster con el resto
+  
+    for ( i in 1:km){
+      for (j in 1:(km-1)){
+      
+      # utilizamos la función NMI (librería Aricode) para el cálculo de la información mutua promedio, con el          parámetro "MAX".  
+      nm <- NMI(clusterer_mult[[n]][[per2[j, 1]]], clusterer_mult[[n]][[per2[j, 2]]])
+      bm[j] <- nm
+      
+      }
+      bm<-sum(bm, na.rm = TRUE)
+      bm_t<-c(bm_t,bm)
+      per2<-per2[-1:-(km-1),]
+      bm<-0
+    
+      }
+    
+   #Ecuación 2 Zhou y Tang
+    
+    bm_t =  (1/(km-1)) * bm_t
+    wm = 1/bm_t
+    
+    z=sum(wm)  # valor que permite normalizar los pesos w para que la suma sea igual a 1.
+    wm = 1/(bm_t*z) # los pesos asignados a los clusterers.
+    sum(wm)  # verificamos que la suma de los pesos sea igual a 1
+    thr = 1/km   # umbral para excluir aquellos Clusterers cuyo valor sea menor a este umbral
+  
+   # SELECTIVE VOTING
+    
+    #Se excluyen aquellos clusteres cuyo valor es menor a 1/t. Para cada valor de xi, se suman los pesos de los     valores que pertenecen a un mismo cluster, y se toma la etiqueta del que arroje el mayor valor.
+      
+  # Vamos a  almacenar las etiquetas finales
+  clasif_sw <- numeric(length = q_datos)
+  
+  # Consideramos los clusterers cuyos pesos superen el umbral thr
+  clusterers_finales <- which(wm > thr)
+  
+  
+  # Iteramos sobre los datos de cada cluster
+  for (i in 1:q_datos) {
+    votos <- rep(0,k) # vector para contar las votaciones
+    
+    
+    # Iteramos sobre los clusterers finales
+    for (j in clusterers_finales) {
+      etiqueta <- clusterer_mult[[n]][[j]][i]
+      votos[etiqueta] <- votos[etiqueta] + 1
+    }
+    
+    # Determinamos la etiqueta más votada
+    etiqueta_final <- which.max(votos)
+    
+    # Almacenamos la etiqueta final en el vector de etiquetas
+    clasif_sw[i] <- etiqueta_final
+  }
+
+  clasif_final_SW[[n]]<-clasif_sw
+}
+
+
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+
+
+#Validacion Selective Weigth Voting con el Rand index
+
+
+# Vamos a guardar las 50 validaciones
+res_mult_SWV<-c()
+
+
+
+for ( i in 1:50){
+  # Tenemos las etiquetas verdaderas
+  true_labels <- as.numeric(as.character(etiquetas_datos_muestra[[i]]))
+  cluster_labels <- as.numeric(as.character(clasif_final_SW[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_mult_SWV[i]<-valid
+  
+    }
+
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_mult_SWV)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_mult_SWV)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+
+
+```{r}
+
+#METODO BASADO EN GRAFOS
+
+# Utizamos el paquete DiceR
+
+set.seed(243)
+
+# Vamos a guardar los resultados
+clasi_CSPA<-list()
+
+# Cantidad de iteraciones
+num_iter<-50
+
+# Activamos la  barra de progreso ya que son procesos que duran varios minutos
+pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Tiempo transcurrido: :elapsedfull || Tiempo restante estimado: :eta]",
+                       total = num_iter,
+                       complete = "=",   
+                       incomplete = "-", 
+                       current = ">",    
+                       clear = FALSE,    
+                       width = 100)  
+
+
+for ( i in 1:num_iter){
+  
+    pb$tick()
+     
+  
+  # Realizamos las particiones con la función consensus_cluster
+  gf_mult <- consensus_cluster(datos_norm[[i]], nk = 2, reps = 1, algorithms = c("km","diana"),progress = FALSE)
+  
+  # Realizamos la particón final con la función CSPA
+  clasi_CSPA[[i]]<-CSPA(gf_mult, k = 2)
+
+  
+  Sys.sleep(0.1)
+
+}  
+
+
+
+```
+
+
+
+```{r}
+
+# Validación CSPA con Rand Index
+
+# Vamos a guardar las 50 validaciones
+
+res_CSPA<-c()
+
+for ( i in 1:num_iter){
+  #Tenemos las etiquetas verdaderas
+  true_labels <- as.numeric(as.character(etiquetas_datos_muestra[[i]]))
+  cluster_labels <- as.numeric(as.character(clasi_CSPA[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_CSPA[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_CSPA)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_CSPA)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+```{r}

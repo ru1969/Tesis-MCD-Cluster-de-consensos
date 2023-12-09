@@ -1,0 +1,725 @@
+---
+title: "Datasets proyecto final"
+author: "RU"
+date: "2023-04-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+```
+
+
+
+
+```{r}
+
+
+library(aricode)
+library(cluster)
+library(ClusterR)
+library(data.table)
+library(diceR)
+library(dplyr)
+library(ggplot2)
+library(ggraph)
+library(ggthemes)
+library(gtools)
+library(modeest)
+library(mvtnorm)
+library (plyr)
+library(reshape2)
+library(sClust)
+library(tidyverse)
+library(progress)
+
+
+```
+
+```{r}
+
+#Generamos los conjuntos de datos
+
+set.seed(342)
+
+generateGaussianData <- function(n, center, sigma, label) {
+  datos_sh = rmvnorm(n, mean = center, sigma = sigma)
+datos_sh = data.frame(datos_sh)
+  names(datos_sh) = c("x", "y")
+  datos_sh = datos_sh %>% mutate(cluster=factor(label))}
+
+
+```
+
+```{r}
+
+
+
+dataset <- {
+  # cluster 1
+  n = 130
+  center = c(4, 4)
+  sigma = matrix(c(1, -0.99, -0.99, 1), nrow = 2)
+  data1 = generateGaussianData(n, center, sigma, 1)
+
+  # cluster 2
+  n = 600
+  center = c(5, 5)
+  sigma = matrix(c(1, -0.99, -0.99, 1), nrow = 2)
+  data2 = generateGaussianData(n, center, sigma, 2)
+
+   # cluster 3
+  n = 120
+  center = c(7, 6)
+  sigma = matrix(c(0.03, 0, 0, 0.03), nrow = 2)
+  data3 = generateGaussianData(n, center, sigma, 3)
+  
+
+  datos_sh = bind_rows(data1, data2,data3)
+
+
+  datos_sh
+}
+
+is.data.frame(datos_sh)
+
+head(datos_sh)
+
+```
+
+```{r}
+
+#Visualizamos los 3 clusters
+
+datos_sh %>% ggplot(aes(x=x, y=y, colour=cluster)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+```
+
+
+```{r}
+# Aplicamos el algoritmo de K-medias con tres centros. 
+
+set.seed(200) 
+
+#Vamos a guardar en una lista los resultados 
+kmeans.re<-list()
+
+
+# Cada observación queda asignado a un cluster 
+
+#Realizamos 50 iteraciones.
+ 
+for ( i in 1:50){
+   
+  cl <- kmeans(datos_sh, centers = 3)
+  kmeans.re[[i]]<-cl$cluster
+     
+    }
+
+
+
+## Visualizando los clusters
+
+k_medias<-as.factor(kmeans.re[[3]]) # Tomamos para graficar una de las 50 iteraciones
+
+datos_sh %>% ggplot(aes(x=x, y=y, colour=k_medias)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+
+
+```
+```{r}
+
+
+# Realizamos la validaciòn de K-medias con Rand index
+
+set.seed(189)
+
+# Vamos a guardar las 50 validaciones
+res_kmedias<-c()
+
+#Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datos_sh$cluster))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(kmeans.re[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_kmedias[i]<-valid
+  
+    }
+
+
+# Tomamos el valor medio como validación
+validacion_kmedias <- mean(res_kmedias)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_kmedias)
+
+# Mostramos  los resultados
+cat("Rand index:", validacion_kmedias, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+```{r}
+
+# METODO EAC
+
+set.seed(325)
+
+#Vamos a generar varias particiones con  el algoritmo k-medias. 
+
+clasif_eac<-list()
+qdatos_sh = nrow(datos_sh)
+k <- round(sqrt(qdatos_sh)) #cálculo de k para k-medias
+q_clusterers<-200 #es la cantidad de clusterers
+
+
+#Realizamos 50 iteraciones
+
+for (m in 1:50){
+
+  km_sh <- list() # En una lista guardamos los 200 clusterers que se generan en cada corrida de k-medias.
+
+  for ( i in 1:q_clusterers){
+    k_s <- kmeans(datos_sh, centers = k)
+     km_sh[[i]]<-k_s$cluster
+    }
+
+
+  #Generamos una matriz nula de nxn
+  mk_sh <- list()    
+
+  for ( i in 1:q_clusterers){
+  
+    mk_sh[[i]] <- matrix(0, ncol = qdatos_sh, nrow = qdatos_sh)
+   
+  }
+
+
+  #Armamos la matriz de similaridad
+
+  for (l in 1:q_clusterers){
+    for (i in 1:qdatos_sh) {
+      for (j in 1:qdatos_sh){ 
+        if (km_sh[[l]][i] == km_sh[[l]][j]){
+        mk_sh[[l]][i,j] = 1  
+        }       else {
+        mk_sh[[l]][i,j] = 0
+      }
+    }
+  }
+}
+
+  matriz_s <-matrix()
+
+  # Sumamos las matrices
+  matriz_s <- mk_sh[[1]]
+
+  for (i in 2:length(mk_sh)) {
+    matriz_s <- matriz_s + mk_sh[[i]]
+  }
+  
+  # Hacemos la matriz de similaridad
+  ms <- matriz_s/length(mk_sh)
+
+# Convertimos la matriz de similaridad en matriz de distancias
+  md <- 1-ms
+  m_dist = as.dist(md)
+  
+  # Una vez obtenida la matriz podemos aplicar método Jerárquico Average
+  hc1 <- hclust(m_dist, method = "average" )
+  
+  clasif<-cutree(hc1, k=3) # cortamos el arbol en 3 clusters
+  
+
+clasif_eac[[m]]<-clasif
+
+}
+
+
+```
+
+
+
+```{r}
+
+#Vamos a ver como queda gráficamente la partición final. Tomamos una de las iteraciones.
+
+set.seed(987)
+
+# Una vez obtenida la matriz podemos aplicar método Jerárquico Average
+hc <- hclust(m_dist, method = "average" )
+
+# Graficamos el dendrograma
+plot(hc, cex = 0.6, hang = -1)
+```
+
+```{r}
+
+# Realizamos el corte con k=3 que es el número de clusters que necesitamos particionar
+plot(hc)
+clasif<-cutree(hc, k=3) # cortar el arbol en 3 clusters
+rect.hclust(hc,k=3,border="red")
+
+
+```
+
+
+
+```{r}
+
+# Podemos visualizar como funcionó el método EAC para particionar el conjunto de datos
+
+EAC<-as.factor(clasif)
+
+datos_sh %>% ggplot(aes(x=x, y=y, color=EAC)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+
+
+```
+
+
+```{r}
+
+#Validación EAC con el Rand index
+
+
+
+# Vamos a guardar las 50 validaciones
+res_eac<-c()
+
+# Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datos_sh$cluster))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(clasif_eac[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_eac[i]<-valid
+  
+    }
+
+
+# Tomamos el valor medio como validación
+validacion_eac <- mean(res_eac)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_eac)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_eac, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+```
+
+
+```{r}
+#  METODO RELABELING
+
+#Vamos a obtener 13 clusterers, a partir de correr el algoritmo de K-medias.
+
+set.seed(178)
+
+q_datos = nrow(datos_sh)
+
+# Fijamos la cantidad de clusters
+k=3
+
+# Cantidad de particiones iniciales
+km = 13
+
+
+
+part_kmeans <-list()
+clusterer2 <- vector("list", length = km)
+clusterer<-list()
+
+
+# Realizamos las 50 iteraciones
+for(n in 1:50){
+
+  clust<-list()
+  part_km<-list()
+  
+  # Se generan los 13 clusterers.
+  for ( i in 1:km){
+    part_km[i] <- kmeans(datos_sh, centers = k)
+       
+      }
+  
+  
+  # Se agrupan los objetos de acuerdo a su pertenecia respecto de los clusters para cada uno de los clusterers.
+  
+  for ( i in 1:km){
+    for ( j in 1:k){
+     clusterer2[[i]][[j]] <- which(part_km[[i]]==j)  
+      
+     }
+  }
+  
+  # Armamos la matriz de kxk para poder ver los elementos que coinciden entre clusters de todos los                  clusterers.
+  # Necesitamos una matriz por relacionar los clusters entre el clusterer de referencia y el resto de los           clusterers. La cantidad de matrices es igual a el total de clusterers menos 1.
+        
+   # Creamos una lista de matrices vacías
+  
+  M_over = list()
+  
+  for ( i in 1:km){
+    
+     M_over[[i]] = matrix(0, ncol = k , nrow = k)
+  
+  }
+  
+   # Utilizamos la función intersect para determinar entre los pares de clusters, aquellos elementos que             coinciden.Tenemos que tomar un clusterer de base para buscar las coincidencias y renombrar
+  
+  for ( m in 1:length(M_over)){
+    for ( i in 1:k){
+      for ( j in 1:k){
+        
+        # Tomamos el clusterer 3   como particiòn de base
+        
+          M_over[[m]][i,j] = length(intersect(clusterer2[[3]][[i]],clusterer2[[m]][[j]]))
+      
+  }
+  }
+  }  
+  
+  
+  # Nombramos filas y columnas de las matrices.
+  # Buscamos el máximo valor de coincidencias entre clusters, renombramos el cluster en función de la               etiqueta del cluster de referencia (en este caso el 3),eliminamos las filas y columnas                          correspondientes, y volvemos a hacer los mismo con el siguiente máximo hasta finalizar. De esta                 forma los clusters del clusterer en cuestión quedarán renombrados.
+  
+  cont<-c()
+  coord <-list()
+  posicion <- c()
+  
+  #Vamos a colocar las particiones renombradas
+  clust<-part_km
+
+  
+  for ( i in 1:km){      # no va esto for ( i in 1:(km!=3))
+   
+    for ( j in 1:k){
+      coord <- which(M_over[[i]] == max(M_over[[i]]), arr.ind = TRUE)
+  
+      fila_val_max <-coord[1] # son los k del clusterer 3 que tomamos de referencia
+      col_val_max <-coord[2] # son los k del clusterer a renombrar
+      clust[[i]][clusterer2[[i]][[coord[2]]]]<- coord[1] # renombra el cluster con el valor de k  que sale de la                                                            matriz de overlap ( es el máximo overlap)
+      M_over[[i]][fila_val_max,col_val_max]<-0
+      
+    }
+       
+  }
+  
+  part_kmeans[[n]]<-part_km 
+  clusterer[[n]]<-clust
+
+
+}
+
+```
+
+
+```{r}
+ # Método Voting
+  
+  
+   # Donde vamos a guardar la clasificacion final del método Voting
+  
+  lambda <- c()  
+   
+for (i in 1:50){
+
+  # pasamos los clusterers como dataframe para trabajarlo. Cada fila es un clusterer
+  dataframe_clusterer <- as.data.frame(do.call(rbind, clusterer[[i]]))
+  
+  # Tomamos cada dato y nos fijamos que etiqueta tiene en cada clusterer. Tomamos como etiqueta final para el       dato en cuestión aquella que se repita la mayor cantidad de veces.
+  
+  lamb <- lapply(dataframe_clusterer, FUN = mlv, method = "mfv")  #con la funcion mlv, obtenemos el valor mas                                                                      frecuente
+  
+  lamb <-unlist(lamb, use.names = FALSE) # convertimos a vector
+  
+  
+  # clasificacion final Voting
+  
+  lambda[[i]]<-lamb 
+      
+}
+
+```
+```{r}
+
+
+# Visualicemos la partición final con el método Voting
+
+Voting<-as.factor(lambda[[1]]) #tomamos el resultado de una de las iteraciones
+
+datos_sh %>% ggplot(aes(x=x, y=y, colour=Voting)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+```
+```{r}
+
+
+
+#Validacion Voting con el Rand index
+
+# Vamos a guardar las 50 validaciones
+res_relab<-c()
+
+# Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datos_sh$cluster))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(lambda[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_relab[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_relab)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_relab)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+```{r}
+
+```
+
+```{r}
+# SELECTIVE WEIGTH VOTING
+
+#Se seleccionan aquellos clusterers cuyo peso wm supere el umbral thr=1/km y luego se considera el peso de cada   uno de los clusterers para determinar a que cluster pertenece cada dato.
+
+#Calculamos para cada clusterer la información mutua promedio respecto de los otros clusterers.
+clasif_final_SW<-list()
+
+per <- permutations(km, 2, 1:(km*(km-1))) #  Tomamos el clusterer 3 de referencia y calculamos la IMP con                                                    respecto al resto de los clusterers 
+
+for (n in 1:50){
+  
+  bm <- c() # Es la información mutua promedio
+  wm <- c() # Es el peso Wm cuya suma debe ser igual a 1
+  bm_t<-c()
+  per2<-per
+  
+  # Ecuación 1 del Zhou y Tang. Se calcula la NMI de cada cluster con el resto
+
+    for ( i in 1:km){
+      for (j in 1:(km-1)){
+      
+      # utilizamos la función NMI (librería Aricode) para el cálculo de la información mutua promedio, con el          parámetro "MAX".   
+      nm <- NMI(clusterer[[n]][[per2[j, 1]]], clusterer[[n]][[per2[j, 2]]])
+      bm[j] <- nm
+      
+      }
+      bm<-sum(bm, na.rm = TRUE)
+      bm_t<-c(bm_t,bm)
+      per2<-per2[-1:-(km-1),]
+      bm<-0
+    
+      }
+    
+    #Ecuación 2 Zhou y Tang
+    
+    bm_t =  (1/(km-1)) * bm_t
+    wm = 1/bm_t
+    
+    z=sum(wm)  # valor que permite normalizar los pesos w para que la suma sea igual a 1.
+    wm = 1/(bm_t*z) # los pesos asignados a los clusterers.
+    sum(wm)  # verificamos que la suma de los pesos sea igual a 1
+    thr = 1/km   # umbral para excluir aquellos Clusterers cuyo valor sea menor a este umbral
+  
+   # SELECTIVE VOTING
+    
+    #Se excluyen aquellos clusteres cuyo valor es menor a 1/t. Para cada valor de xi, se suman los pesos de los     valores que pertenecen a un mismo cluster, y se toma la etiqueta del que arroje el mayor valor.
+    
+  
+  # Vamos a  almacenar las etiquetas finales
+  clasif_sw <- numeric(length = q_datos)
+  
+  # Consideramos los clusterers cuyos pesos superen el umbral thr
+  clusterers_finales <- which(wm > thr)
+  
+  # Iteramos sobre los datos de cada cluster
+    for (i in 1:q_datos) {
+    votos <- rep(0,k) # vector para contar las votaciones
+    
+    # Iteramos sobre los clusterers finales
+    for (j in clusterers_finales) {
+      etiqueta <- clusterer[[n]][[j]][i]
+      votos[etiqueta] <- votos[etiqueta] + 1
+    }
+    
+    # Determinamos la etiqueta más votada
+    etiqueta_final <- which.max(votos)
+    
+    # Almacenamos la etiqueta final en el vector de etiquetas
+    clasif_sw[i] <- etiqueta_final
+  }
+
+  clasif_final_SW[[n]]<-clasif_sw
+}
+
+
+```
+
+
+```{r}
+
+#Visualicemos resultados de aplicar Selective Weigth Voting
+
+SWVoting<-as.factor(clasif_final_SW[[2]])# Tomamos uno de los resultados de las iteraciones
+
+datos_sh %>% ggplot(aes(x=x, y=y, colour=SWVoting)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+```
+
+```{r}
+
+#Validacion Selective Weigth Voting con el Rand index
+
+
+# Vamos a guardar las 50 validaciones
+res_SWV<-c()
+
+# Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datos_sh$cluster))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(clasif_final_SW[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_SWV[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_SWV)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_SWV)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+
+```
+
+
+
+
+```{r}
+
+# METODO BASADOS en GRAFOS
+
+# Utizamos el paquete DiceR
+
+set.seed(1345)
+
+# Vamos a guardar los resultados 
+clasi_CSPA<-list()
+
+# Cantidad de iteraciones
+num_iter<-50
+
+# Activamos la  barra de progreso ya que son procesos que duran varios minutos
+pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Tiempo transcurrido: :elapsedfull || Tiempo restante estimado: :eta]",
+                       total = num_iter,
+                       complete = "=",   
+                       incomplete = "-", 
+                       current = ">",    
+                       clear = FALSE,    
+                       width = 100)  
+
+
+for ( i in 1:num_iter){
+  
+  pb$tick()
+  
+  # Realizamos las particiones con la función consensus_cluster
+  gf_shp <- consensus_cluster(datos_sh, nk = 3, reps = num_iter, algorithms = c("km"),
+  progress = FALSE)
+  
+  # Realizamos la particón final con la función CSPA
+  clasi_CSPA[[i]]<-CSPA(gf_shp, k = 3)
+  
+  Sys.sleep(0.1)
+    
+}  
+
+
+```
+
+```{r}
+
+
+#Visualicemos resultados de aplicar CSPA
+
+CSPA_sh<-as.factor(clasi_CSPA[[1]]) # Tomamos uno de los resultados de las iteraciones
+
+datos_sh %>% ggplot(aes(x=x, y=y, colour=CSPA_sh)) +
+  geom_point() +
+  coord_fixed() + 
+  scale_shape_manual(values=c(2, 3))
+
+```
+
+
+
+```{r}
+
+# Validación CSPA con Rand index
+
+# Vamos a guardar las 50 validaciones
+res_CSPA<-c()
+
+# Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datos_sh$cluster))
+
+for ( i in 1:num_iter){
+  cluster_labels <- as.numeric(as.character(clasi_CSPA[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_CSPA[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_CSPA)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_CSPA)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+```
+
+```{r}
+
+
+```
+

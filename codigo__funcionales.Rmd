@@ -1,0 +1,718 @@
+---
+title: "Datos_tesis_funcionales"
+author: "RU"
+date: "2023-08-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(aricode)
+library(cluster)
+library(ClusterR)
+library(data.table)
+library(diceR)
+library(dplyr)
+library(fda)
+library(fpc)
+library(funHDDC)
+library(gtools)
+library(modeest)
+library (plyr)
+library(readr)
+library(reshape2)
+library(sClust)
+library(stats)
+library(tidyverse)
+
+
+```
+
+
+
+```{r}
+
+#Cargamos los datos
+
+CanadianWeather_Temp <- CanadianWeather$dailyAv[,,"Temperature.C"]
+CanadianWeather_Precip <- CanadianWeather$dailyAv[,,"Precipitation.mm"]
+
+
+```
+
+```{r}
+
+dim(CanadianWeather_Temp)
+
+```
+
+```{r}
+# Tenemos  los nombres de estaciones en CanadianWeather$region
+est_names <- names(CanadianWeather$region)
+reg_names <- CanadianWeather$region
+
+# Asignamos números del 1 al 4 a las regiones
+reg_num <- c("Atlantic" = 1, "Continental" = 2, "Pacific" = 3, "Arctic" = 4)
+
+# Creamos dataframe con los nombres de las estaciones y las regiones
+reg_data <- data.frame(
+  Estacion = est_names,
+  Region = reg_names,
+  RegNum = reg_num[reg_names],
+  stringsAsFactors = FALSE  # Para evitar que los valores se conviertan en factores
+)
+
+# Vemos las primeras filas del dataframe
+head(reg_data)
+```
+
+
+```{r}
+
+# Aplicamos el algoritmo de clustering para datos funcionales funHDC. 
+
+set.seed(356)
+
+funHDDC_temp<-list()
+
+
+basis <- create.fourier.basis(c(0, 365), nbasis=21, period=365) 
+daytempfd <- smooth.basis(day.5, CanadianWeather$dailyAv[,,"Temperature.C"], basis,
+                          fdnames=list("Day", "Station", "Deg C"))$fd
+dayprecfd <- smooth.basis(day.5, CanadianWeather$dailyAv[,,"Precipitation.mm"], basis,
+                        fdnames=list("Day", "Station", "Mm"))$fd
+
+# Realizamos 50 iteraciones y guardamos los resultados de cada una en una lista
+for ( i in 1:50){
+  res.multi <- funHDDC(list(daytempfd,dayprecfd), K=4)# Tomamos las variables precipitaciones y temperaturas
+  funHDDC_temp[[i]] <- res.multi$class
+}
+
+```
+
+```{r}
+
+#VALIDACION FunHDDC con Rand Index
+
+#Vamos a guardar las validaciones en un vector
+res_funHDDC<-c()
+
+# Eliminamos los elementos que arrojaron Null en las corridas de funHDDC
+funHDDC_temp <- funHDDC_temp[!sapply(funHDDC_temp, is.null)]
+
+fh<-length(funHDDC_temp)
+
+true_labels <- as.numeric(as.character(reg_data$RegNum))
+
+for (i in 1:fh){
+
+    funHDDC_temp[[i]] <- funHDDC_temp[[i]][!sapply(funHDDC_temp[[i]], is.null)]
+
+    cluster_labels <- as.numeric(as.character(funHDDC_temp[[i]]))
+    res_funHDDC[i] = external_validation(true_labels, cluster_labels, method = "rand_index")
+  
+}
+
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_funHDDC)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_funHDDC)
+
+# Vemos los resultados
+cat("Rand index :", validacion_relab, "\n")
+cat("Desvio standard :", desvio_estandar, "\n")
+
+
+```
+
+```{r}
+#Método EAC
+
+#Vamos a generar las particiones a partir de sucesivas corridas del  algoritmo funHDDC. 
+
+set.seed(335)
+
+qdatos_fun = 35
+k <- round(sqrt(qdatos_fun)) # determinamos el valor de k para los clusterers
+qclusterers<-200 # cantidad de partiones iniciales (clusterers)
+clasif_eac<-list()
+num_iter<-50 
+
+
+
+
+pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Tiempo transcurrido: :elapsedfull || Tiempo restante estimado: :eta]",
+                       total = num_iter,
+                       complete = "=",   
+                       incomplete = "-", 
+                       current = ">",    
+                       clear = FALSE,    
+                       width = 100)      
+for ( m in 1:num_iter){
+  
+  pb$tick()
+    
+    HDDC_fun<-list() # En una lista guardamos los 200 clusterers que se generan en cada corrida de funHDDC.
+    
+      
+    for ( i in 1:qclusterers){
+            resul <- NULL
+           while (is.null(resul)) {
+         
+          resm <- funHDDC(list(daytempfd,dayprecfd), K=4)
+          resul <- resm$class
+           }
+          HDDC_fun[[i]]<-resul
+         
+        }
+    
+  
+    mk_fun <- list()    
+  
+    # Generamos una matriz nula de nxn
+  
+    for ( i in 1:length(HDDC_fun)){
+    
+    mk_fun[[i]] <- matrix(0, ncol = qdatos_fun, nrow = qdatos_fun)
+     
+    }
+  
+    #Armamos la matriz de similaridad
+  
+    for (l in 1:length(HDDC_fun)){
+      for (i in 1:qdatos_fun) {
+        for (j in 1:qdatos_fun){ 
+          if (HDDC_fun[[l]][i] == HDDC_fun[[l]][j]){
+            mk_fun[[l]][i,j] = 1  
+      }   else {
+            mk_fun[[l]][i,j] = 0
+      }
+      }
+      }
+      }
+  
+  
+      m_simil <-matrix()
+  
+  
+    # Sumamos las matrices
+  
+    m_simil <- mk_fun[[1]]
+  
+  
+    for (i in 2:length(length(HDDC_fun))) {
+      m_simil <- m_simil + mk_fun[[i]]
+    }
+    
+    
+    # Hacemos la matriz de similaridad
+    
+    ms <- m_simil/length(HDDC_fun)
+    
+    # Convertimos la matriz de similaridad en matriz de distancias
+    
+    md <- 1-ms
+    MDist = as.dist(md)
+    
+    
+    # Una vez obtenida la matriz podemos aplicar método Jerárquico Average
+    hc <- hclust(MDist, method = "average" )
+    
+    clasif<-cutree(hc, k=4) # cortar el arbol en 4 clusters
+    
+    
+    clasif_eac[[m]]<-clasif
+  
+  Sys.sleep(0.1)
+
+}
+
+
+
+```
+
+
+
+
+
+```{r}
+
+
+# Vamos a guardar las 50 validaciones
+res_eac<-c()
+
+# Tomamos las etiquetas 
+true_labels <- as.numeric(as.character(reg_data$RegNum))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(clasif_eac[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_eac[i]<-valid
+  
+    }
+
+
+
+# Tomamos el valor medio como validación
+validacion_eac <- mean(res_eac)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_eac)
+
+# Imprimir los resultados
+cat("Rand index:", validacion_eac, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+
+
+```{r}
+# RELABELING
+
+#Vamos a obtener 13 clusterers, uno por cada corrida de funHDDC
+
+
+set.seed(176)
+
+
+# La cantidad de clusters que estamos buscando
+k=4
+
+# Cantidad de clusterers
+km = 13
+
+# Vamos a guardar las particiones en una lista
+part_hddc <-list()
+clusterer2 <- list()
+clusterer<-list()
+
+#Realizamos las 50 iteraciones
+
+for(n in 1:50){
+  
+  clust<-list()
+  part_h<-list()
+  
+    
+      # Realizamos las corridas de funHDDC para generar los 13 clusterers.
+      
+      for ( i in 1:km){
+        resultado <- NULL
+        while (is.null(resultado)) {
+           res.multi <- funHDDC(list(daytempfd,dayprecfd), K=4)
+          resultado<-res.multi$class 
+        }
+           part_h[[i]] <-resultado           
+           
+          }
+      
+ 
+  
+  
+     # Inicializamos clusterer2 como una lista anidada vacía
+    clusterer2 <- vector("list", length = km)
+    
+    # Inicializamos las listas interiores
+    for (i in 1:km) {
+      clusterer2[[i]] <- vector("list", length = k)
+    }
+      
+      # Se agrupan los objetos de acuerdo a su pertenecia respecto de los clusters para cada uno de los                 clusterers.
+          
+          for ( i in 1:km){
+            for ( j in 1:k){
+             clusterer2[[i]][[j]] <- which(part_h[[i]]==j)  
+              
+             }
+          }
+          
+          
+      # Armamos la matriz de kxk para poder ver los elementos que coinciden entre clusters de todos los                  clusterers.
+        
+      # Necesitamos una matriz por relacionar los clusters entre el clusterer de referencia y el resto de los           clusterers. La cantidad de matrices es igual a el total de clusterers menos 1.
+        
+        
+        
+        # Creamos una lista de matrices vacías
+        M_over = list()
+        
+        for ( i in 1:km){
+          
+           M_over[[i]] = matrix(0, ncol = k , nrow = k)
+        
+        }
+        
+        # Utilizamos la función intersect para determinar entre los pares de clusters, aquellos elementos que             coinciden.Tenemos que tomar un clusterer de base para buscar las coincidencias y renombrar
+        
+        for ( m in 1:length(M_over)){
+          for ( i in 1:k){
+            for ( j in 1:k){
+                M_over[[m]][i,j] = length(intersect(clusterer2[[3]][[i]],clusterer2[[m]][[j]])) # Tomamos el                    clusterer 3 de referencia
+            
+        }
+        }
+        }  
+      
+    
+      # Nombramos filas y columnas de las matrices.
+      # Buscamos el máximo valor de coincidencias entre clusters, renombramos el cluster en función de la               etiqueta del cluster de referencia ( en este caso el 3),eliminamos las filas y columnas                         correspondientes, y volvemos a hacer los mismo con el siguiente máximo. Así hasta finalizar. De esta            forma los clusters del clusterer en cuestión quedarán renombrados.
+      
+      cont<-c()
+      coord <-list()
+      posicion <- c()
+      
+      #Vamos a colocar las particiones renombradas
+        clust<-part_h
+        
+      
+      for ( i in 1:(km!=3)){
+      
+        for ( j in 1:k){
+          coord <- which(M_over[[i]] == max(M_over[[i]]), arr.ind = TRUE)
+      
+          fila_val_max <-coord[1] # son los k del clusterer 3 que tomamos de referencia
+          col_val_max <-coord[2] # son los k del clusterer a renombrar
+          clust[[i]][clusterer2[[i]][[coord[2]]]]<- coord[1] # renombra el cluster con el valor de k  que sale            de la matriz de overlap (es el máximo overlap)
+          M_over[[i]][fila_val_max,col_val_max]<-0
+          
+        }
+      }
+         part_hddc[[n]]<-part_h 
+        clusterer[[n]]<-clust
+
+}
+
+
+```
+
+
+
+
+
+```{r}
+ # Método Voting
+  
+set.seed(168)
+  
+   # Donde vamos a guardar la clasificacion final del método Voting
+  
+  lambda <- c()  
+   
+# Realizamos 50 iteraciones
+  
+for (i in 1:50){
+
+    #Pasamos los clusterers como dataframe para trabajarlo. Cada fila es un clusterer
+    dataframe_clusterer <- as.data.frame(do.call(rbind, clusterer[[i]]))
+  
+  # Tomamos cada dato y nos fijamos que etiqueta tiene en cada clusterer. Tomamos como etiqueta final para el       dato en cuestión aquella que se repita la mayor cantidad de veces.
+  
+    resultados <- lapply(dataframe_clusterer, FUN = mlv, method = "mfv")#con la funcion mlv, obtenemos el valor       mas frecuente
+
+  # Si hay mas de un valor frecuente elegimos de manera aleatoria uno de esos valores  
+  
+
+    selec_valor_aleatorio <- function(valores_frecuentes) {
+      if (length(valores_frecuentes) > 0) {
+        muestra_aleatoria <- sample(valores_frecuentes, 1)
+        return(muestra_aleatoria)
+      } else {
+        return(NULL)
+      }
+    }
+    
+    val_aleatorios <- sapply(resultados, selec_valor_aleatorio)
+      
+    lamb <-unlist(val_aleatorios, use.names = FALSE) # convertimos a vector
+      
+      # clasificacion final Voting
+      
+      lambda[[i]]<-lamb 
+          
+      
+  
+}
+
+```
+
+```{r}
+
+#Validacion Voting con el Rand index
+
+
+#Vamos a guardar las 50 validaciones
+
+res_relab<-c()
+
+#Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(reg_data$RegNum))
+
+
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(lambda[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_relab[i]<-valid
+  
+    }
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_relab)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_relab)
+
+# Imprimimos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+```{r}
+
+# SELECTIVE WEIGTH VOTING
+
+#Se seleccionan aquellos clusterers cuyo peso wm supere el umbral thr=1/km y luego se considera el peso de cada   uno de los clusterers para determinar a que cluster pertenece cada dato.
+
+#Calculamos para cada clusterer la información mutua promedio respecto de los otros clusterers.
+
+clasif_final_SW<-list()
+
+per <- permutations(km, 2, 1:(km*(km-1))) # Tomamos el clusterer 3 de referencia y calculamos la IMP con                                                      respecto al resto de los clusterers 
+
+
+#Realizamos las 50 iteraciones
+
+for (n in 1:50){
+  
+    bm <- c() # Es la información mutua promedio
+    wm <- c() # Es el peso Wm cuya suma debe ser igual a 1
+    bm_t<-c()
+    per2<-per
+    
+    
+    # Ecuación 1 del Zhou y Tang. Se calcula la NMI de cada cluster con el resto.
+    
+    for ( i in 1:km){
+        for (j in 1:(km-1)){
+        
+        # utilizamos la función NMI (librería Aricode) para el cálculo de la información mutua promedio, con el           parámetro "MAX". 
+        nm <- NMI(clusterer[[n]][[per2[j, 1]]], clusterer[[n]][[per2[j, 2]]])
+        bm[j] <- nm
+        
+        }
+        bm<-sum(bm, na.rm = TRUE)
+        bm_t<-c(bm_t,bm)
+        per2<-per2[-1:-(km-1),]
+        bm<-0
+      
+        }
+      
+      
+    #Ecuación 2 Zhou y Tang
+    
+    bm_t =  (1/(km-1)) * bm_t
+    wm = 1/bm_t
+    
+    z=sum(wm)  # valor que permite normalizar los pesos w para que la suma sea igual a 1.
+    wm = 1/(bm_t*z) # los pesos asignados a los clusterers.
+    sum(wm)  # verificamos que la suma de los pesos sea igual a 1
+    thr = 1/km   # umbral para excluir aquellos Clusterers cuyo valor sea menor a este umbral
+      
+    # SELECTIVE VOTING
+    
+    #Se excluyen aquellos clusteres cuyo valor es menor a 1/t. Para cada valor de xi, se suman los pesos de los     valores que pertenecen a un mismo cluster, y se toma la etiqueta del que arroje el mayor valor.
+    
+    
+    
+    # Vamos a  almacenar las etiquetas finales
+    clasif_sw <- numeric(length = qdatos_fun)
+    
+    # Consideramos los clusterers cuyos pesos superen el umbral thr
+    clusterers_finales <- which(wm > thr)
+    
+    # Iteramos sobre los datos de cada cluster
+    for (i in 1:qdatos_fun) {
+      votos <- rep(0,k) # vector para contar las votaciones
+      
+    # Iteramos sobre los clusterers finales
+    for (j in clusterers_finales) {
+      etiqueta <- clusterer[[n]][[j]][i]
+      votos[etiqueta] <- votos[etiqueta] + 1
+      }
+      
+      # Determinamos la etiqueta más votada
+      etiqueta_final <- which.max(votos)
+      
+      # Almacenamos la etiqueta final en el vector de etiquetas
+      clasif_sw[i] <- etiqueta_final
+    }
+  
+    #Guardamos en un lista la clasificación final de cada una de las iteraciones
+    clasif_final_SW[[n]]<-clasif_sw
+}
+
+
+```
+
+
+
+```{r}
+
+
+# Vamos a guardar las 50 validaciones
+
+res_SWV<-c()
+
+#Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(reg_data$RegNum))
+
+
+#Realizamos la validación 
+for ( i in 1:50){
+  cluster_labels <- as.numeric(as.character(clasif_final_SW[[i]]))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_SWV[i]<-valid
+  
+    }
+
+
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_SWV)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_SWV)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+```
+
+
+```{r}
+
+# METODO BASADO EN GRAFOs- CSPA
+
+# Para poder aplicar este método necesitamos convertir los datos a formato tabular.
+
+# Tenemos los datos de estaciones, temperaturas y precipitaciones en las siguientes variables
+
+estaciones <- CanadianWeather$place
+temperaturas <- CanadianWeather$dailyAv[, ,"Temperature.C"]
+precip <- CanadianWeather$dailyAv[,,"Precipitation.mm"]
+
+#Vamos a modificar el formato en que están presentados los datos, lo llevaremos a forma de data frame para poder trabajarlos
+
+# Creamos un vector de días (365 días)
+dias <- 1:365
+
+# Creamos una matriz de temperaturas y precipitaciones donde las filas son días y las columnas son estaciones
+
+temp_matrix <- t(temperaturas)  # Transponer la matriz
+precip_matrix <- t(precip)
+
+
+# Creamos un data frame donde cada fila es una observación y en las columnas tnedremos la estación, el día y la temperatura correspondiente. Otro data frame para las precipitaciones.
+
+datafun_temp <- data.frame(
+  Estacion = rep(estaciones, each = 365),
+  Dia = rep(dias, times = 35),
+  Temp = as.vector(temp_matrix)
+)
+
+datafun_precip <- data.frame(
+  Estacion = rep(estaciones, each = 365),
+  Dia = rep(dias, times = 35),
+  Precip = as.vector(precip_matrix)
+)
+
+
+# vamos a estandarizar los datos antes de aplicar el método
+
+Temp_std <-scale(datafun_temp$Temp)
+Precip_std <-scale(datafun_precip$Precip)
+
+```
+
+
+
+```{r}
+# Método CSPA
+
+
+# Vamos a trabajar con el caso multivariado, con las variables temperatura y precipitaciones
+
+#Colocamos en un solo dataframe las columnas
+
+datafun_std<-cbind(Temp_std,Precip_std)
+
+
+# Utilizamos las funciones de la librería DiceR
+
+set.seed(272)
+
+#Vamos a guardar los resultados en una lista
+clasi_CSPA<-list()
+
+# Realizamos las particiones con la función consensus_cluster
+gf_fun <- consensus_cluster(datafun_std, nk = 4, reps = 1, algorithms = c("pam"),
+progress = TRUE)
+
+# Realizamos la particón final con la función CSPA
+clasi_CSPA[[i]]<-CSPA(gf_fun, k = 4)
+
+
+```
+
+```{r}
+# Validación CSPA con Rand index
+
+
+#Guardamos el resutlado de la validación
+res_CSPA<-c()
+
+#Tenemos las etiquetas verdaderas
+true_labels <- as.numeric(as.character(datafun_precip$RegNum))
+
+
+  cluster_labels <- as.numeric(as.character(clasi_CSPA))
+  valid<-external_validation(true_labels, cluster_labels, method = "rand_index")
+  res_CSPA<-valid
+  
+
+
+
+# Tomamos el valor medio como validación
+validacion_relab <- mean(res_CSPA)
+
+# Calculamos el desvió estándar
+desvio_estandar <- sd(res_CSPA)
+
+# Mostramos los resultados
+cat("Rand index:", validacion_relab, "\n")
+cat("Desvio standard:", desvio_estandar, "\n")
+
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
